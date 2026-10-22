@@ -14,31 +14,103 @@ $('subjectSelect').addEventListener('change',topicUpdate);
 $('createBtn').onclick=createRoom;$('joinBtn').onclick=joinRoom;$('roomCode').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5));
 async function getBank(subject){const snap=await db.ref('questionBank').once('value');const bank=snap.val()||{};return Object.entries(bank).map(([id,q])=>({...q,id})).filter(q=>q.subject===subject&&q.active!==false);}
 function chooseQuestion(bank,difficulty,used){const choices=bank.filter(q=>q.difficulty===difficulty&&!used.includes(q.id));const fallback=bank.filter(q=>!used.includes(q.id));const a=choices.length?choices:fallback;return a.length?a[Math.floor(Math.random()*a.length)]:null;}
-async function createRoom(){const name=$('playerName').value.trim().slice(0,20)||'Player';const subject=$('subjectSelect').value;const topic=$('topicSelect').value;say('homeMessage','Connecting…',true);try{await initFirebase(true);const bank=await getBank(subject);const pool=bank.filter(q=>topic==='all'||q.topic===topic);if(pool.length<5)throw Error('Is subject/topic mein kam se kam 5 questions chahiye. Admin panel se starter bank load karo.');let code,committed=false;for(let i=0;i<5&&!committed;i++){code=Math.random().toString(36).slice(2,7).toUpperCase();roomRef=db.ref('rooms/'+code);const q=chooseQuestion(pool,'Medium',[]);const tx=await roomRef.transaction(old=>old||{hostUid:user.uid,subject,topic,createdAt:Date.now(),status:'waiting',players:{[user.uid]:{name,score:0,streak:0,correct:0}},round:0,difficulty:'Medium',question:q,used:[q.id],answers:{},history:[]});committed=tx.committed&&tx.snapshot.val().hostUid===user.uid;}if(!committed)throw Error('Room create nahi hua. Dobara try karo.');roomCode=code;listenRoom();say('homeMessage','',true);}catch(e){say('homeMessage',e.message);}}
+async function createRoom() {
+  const name = $('playerName').value.trim().slice(0, 20) || 'Player';
+  const subject = $('subjectSelect').value;
+  const topic = $('topicSelect').value;
+
+  try {
+    await initFirebase(true);
+
+    const bank = await getBank(subject);
+    const pool = bank.filter(q => topic === 'all' || q.topic === topic);
+
+    if (pool.length < 5) {
+      throw Error('Is topic mein 5 questions nahi hain.');
+    }
+
+    const q = chooseQuestion(pool, 'Medium', []);
+    if (!q) throw Error('Question available nahi hai.');
+
+    let created = false;
+
+    for (let i = 0; i < 10 && !created; i++) {
+      const code = Math.random().toString(36)
+        .slice(2, 7).toUpperCase();
+
+      const ref = db.ref('rooms/' + code);
+
+      const tx = await ref.transaction(old => {
+        if (old) return;
+        return {
+          hostUid: user.uid,
+          subject,
+          topic,
+          createdAt: Date.now(),
+          status: 'waiting',
+          players: {
+            [user.uid]: {
+              name, score: 0, streak: 0, correct: 0
+            }
+          },
+          round: 0,
+          question: q,
+          used: [q.id],
+          answers: {},
+          history: []
+        };
+      });
+
+      if (tx.committed) {
+        roomCode = code;
+        roomRef = ref;
+        listenRoom();
+        created = true;
+        say('homeMessage', 'Room created: ' + code, true);
+      }
+    }
+
+    if (!created) throw Error('Room create nahi hua.');
+
+  } catch (e) {
+    say('homeMessage', e.message);
+  }
+}
+
 async function joinRoom() {
   const name = $('playerName').value.trim().slice(0, 20) || 'Player';
-  roomCode = $('roomCode').value.trim().toUpperCase();
+  const code = $('roomCode').value.trim().toUpperCase();
 
-  if (roomCode.length !== 5) {
+  if (code.length !== 5) {
     return say('homeMessage', '5-character room code enter karo.');
   }
 
   try {
     await initFirebase(true);
-    roomRef = db.ref('rooms/' + roomCode);
 
-    const snap = await roomRef.once('value');
+    const ref = db.ref('rooms/' + code);
+    const snap = await ref.once('value');
     const room = snap.val();
 
-    if (!room) throw Error('Room code galat hai.');
-    if (room.status !== 'waiting') throw Error('Room already start ho chuka hai.');
-    if (Object.keys(room.players || {}).length !== 1) {
-      throw Error('Room full hai ya pehle se joined hai.');
+    if (!room) throw Error('Ye room code Firebase mein nahi mila.');
+    if (room.status !== 'waiting') {
+      throw Error('Room waiting mein nahi hai.');
     }
 
-    const tx = await roomRef.transaction(r => {
-      if (!r || r.status !== 'waiting' ||
-          Object.keys(r.players || {}).length !== 1) return;
+    const players = room.players || {};
+
+    if (Object.keys(players).length !== 1) {
+      throw Error('Room full hai ya pehle join ho chuka hai.');
+    }
+
+    if (players[user.uid]) {
+      throw Error('Host aur opponent ke liye alag device use karo.');
+    }
+
+    const tx = await ref.transaction(r => {
+      if (!r || r.status !== 'waiting') return;
+      if (Object.keys(r.players || {}).length !== 1) return;
+      if (r.players && r.players[user.uid]) return;
 
       r.players = r.players || {};
       r.players[user.uid] = {
@@ -47,15 +119,19 @@ async function joinRoom() {
       r.status = 'playing';
       r.round = 1;
       r.startedAt = Date.now();
+
       return r;
     });
 
     if (!tx.committed) {
-      throw Error('Room join nahi hua. Naya room code try karo.');
+      throw Error('Room kisi aur ne join kar liya. Naya room banao.');
     }
 
+    roomCode = code;
+    roomRef = ref;
     listenRoom();
     say('homeMessage', '', true);
+
   } catch (e) {
     say('homeMessage', e.message);
   }
