@@ -15,7 +15,51 @@ $('createBtn').onclick=createRoom;$('joinBtn').onclick=joinRoom;$('roomCode').ad
 async function getBank(subject){const snap=await db.ref('questionBank').once('value');const bank=snap.val()||{};return Object.entries(bank).map(([id,q])=>({...q,id})).filter(q=>q.subject===subject&&q.active!==false);}
 function chooseQuestion(bank,difficulty,used){const choices=bank.filter(q=>q.difficulty===difficulty&&!used.includes(q.id));const fallback=bank.filter(q=>!used.includes(q.id));const a=choices.length?choices:fallback;return a.length?a[Math.floor(Math.random()*a.length)]:null;}
 async function createRoom(){const name=$('playerName').value.trim().slice(0,20)||'Player';const subject=$('subjectSelect').value;const topic=$('topicSelect').value;say('homeMessage','Connecting…',true);try{await initFirebase(true);const bank=await getBank(subject);const pool=bank.filter(q=>topic==='all'||q.topic===topic);if(pool.length<5)throw Error('Is subject/topic mein kam se kam 5 questions chahiye. Admin panel se starter bank load karo.');let code,committed=false;for(let i=0;i<5&&!committed;i++){code=Math.random().toString(36).slice(2,7).toUpperCase();roomRef=db.ref('rooms/'+code);const q=chooseQuestion(pool,'Medium',[]);const tx=await roomRef.transaction(old=>old||{hostUid:user.uid,subject,topic,createdAt:Date.now(),status:'waiting',players:{[user.uid]:{name,score:0,streak:0,correct:0}},round:0,difficulty:'Medium',question:q,used:[q.id],answers:{},history:[]});committed=tx.committed&&tx.snapshot.val().hostUid===user.uid;}if(!committed)throw Error('Room create nahi hua. Dobara try karo.');roomCode=code;listenRoom();say('homeMessage','',true);}catch(e){say('homeMessage',e.message);}}
-async function joinRoom(){const name=$('playerName').value.trim().slice(0,20)||'Player';roomCode=$('roomCode').value.trim().toUpperCase();if(roomCode.length!==5)return say('homeMessage','5-character room code enter karo.');try{await initFirebase(true);roomRef=db.ref('rooms/'+roomCode);const tx=await roomRef.transaction(r=>{if(!r||r.status!=='waiting'||Object.keys(r.players||{}).length!==1)return;r.players[user.uid]={name,score:0,streak:0,correct:0};r.status='playing';r.round=1;r.startedAt=Date.now();return r;});if(!tx.committed)throw Error('Room nahi mila ya room pehle se full hai.');listenRoom();say('homeMessage','',true);}catch(e){say('homeMessage',e.message);}}
+async function joinRoom() {
+  const name = $('playerName').value.trim().slice(0, 20) || 'Player';
+  roomCode = $('roomCode').value.trim().toUpperCase();
+
+  if (roomCode.length !== 5) {
+    return say('homeMessage', '5-character room code enter karo.');
+  }
+
+  try {
+    await initFirebase(true);
+    roomRef = db.ref('rooms/' + roomCode);
+
+    const snap = await roomRef.once('value');
+    const room = snap.val();
+
+    if (!room) throw Error('Room code galat hai.');
+    if (room.status !== 'waiting') throw Error('Room already start ho chuka hai.');
+    if (Object.keys(room.players || {}).length !== 1) {
+      throw Error('Room full hai ya pehle se joined hai.');
+    }
+
+    const tx = await roomRef.transaction(r => {
+      if (!r || r.status !== 'waiting' ||
+          Object.keys(r.players || {}).length !== 1) return;
+
+      r.players = r.players || {};
+      r.players[user.uid] = {
+        name, score: 0, streak: 0, correct: 0
+      };
+      r.status = 'playing';
+      r.round = 1;
+      r.startedAt = Date.now();
+      return r;
+    });
+
+    if (!tx.committed) {
+      throw Error('Room join nahi hua. Naya room code try karo.');
+    }
+
+    listenRoom();
+    say('homeMessage', '', true);
+  } catch (e) {
+    say('homeMessage', e.message);
+  }
+}
 $('fiftyBtn').onclick=()=>{if(powerUsed||!window.currentQuestion)return;const q=window.currentQuestion;const wrong=q.options.map((_,i)=>i).filter(i=>i!==q.answer);hiddenChoices=wrong.sort(()=>Math.random()-.5).slice(0,2);powerUsed=true;hiddenChoices.forEach(i=>{const b=document.querySelector('#answers [data-choice="'+i+'"]');if(b)b.style.display='none';});$('fiftyBtn').disabled=true;$('battleMessage').textContent='50/50 used — two wrong options removed.';};function listenRoom(){if(roomListener&&roomRef)roomRef.off('value',roomListener);roomListener=s=>{const r=s.val();if(!r){say('homeMessage','Room close ho gaya.');show('home');return;}renderRoom(r);};roomRef.on('value',roomListener);}
 function renderScores(players){$('players').innerHTML=Object.entries(players||{}).map(([id,p])=>`<div class="player"><span>${esc(p.name)}${id===user.uid?' <small>YOU</small>':''}</span><b>${p.score||0}</b></div>`).join('');}
 function renderRoom(r){renderScores(r.players);if(r.status==='waiting'){$('copyBtn').textContent=roomCode+'　▣';show('waiting');return;}if(r.status==='finished'){clearTimeout(hostTimer);clearInterval(clockTimer);showResult(r);return;}if(r.status!=='playing')return;show('battle');const q=r.question;window.currentQuestion=q;$('battleSubject').textContent=r.subject.toUpperCase();$('progress').textContent=`QUESTION ${r.round} / 5`;const duration=TIMER[q.difficulty]||TIMER.Medium;$('difficulty').textContent=`${q.difficulty.toUpperCase()} · ${duration} SECONDS · ${esc(q.topic).toUpperCase()}`;$('question').textContent=q.text;const myAnswer=(r.answers||{})[user.uid];answered=!!myAnswer;$('answers').innerHTML=q.options.map((o,i)=>`<button class="answer" data-choice="${i}" ${answered?'disabled':''} style="${hiddenChoices.includes(i)?'display:none':''}"><span>${'ABCD'[i]}</span>${esc(o)}</button>`).join('');document.querySelectorAll('.answer').forEach(b=>b.onclick=()=>submitAnswer(Number(b.dataset.choice),r));$('fiftyBtn').disabled=powerUsed;$('battleMessage').textContent=answered?'Answer locked. Waiting for opponent…':'Answer before the timer ends.';clock(r,duration);if(user.uid===r.hostUid){scheduleRound(r,duration);if(Object.keys(r.answers||{}).length>=Object.keys(r.players||{}).length)advanceRound(r.round);}}
