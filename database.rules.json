@@ -1,6 +1,6 @@
 {
   "rules": {
-    "questionBank": { ".read": "auth != null", ".write": "auth != null && auth.token.email === 'ADMIN_EMAIL'" },
+    "questionBank": { ".read": "auth != null", ".write": "auth != null && auth.token.email === 'admin email'" },
     "rooms": { "$room": { ".read": "auth != null", ".write": "auth != null" } },
     "matches": { "$match": { ".read": "auth != null", ".write": "auth != null" } },
     "leaderboard": { ".read": "auth != null", ".write": "auth != null" }
